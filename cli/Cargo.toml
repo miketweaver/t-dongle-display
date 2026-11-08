@@ -1,0 +1,18 @@
+[package]
+name = "tdongle"
+version = "1.0.0"
+edition = "2021"
+description = "Draw on a LilyGO T-Dongle-S3 screen over USB serial"
+license = "MIT"
+repository = "https://github.com/miketweaver/t-dongle-display"
+publish = false
+
+# No dependencies on purpose: std + a handful of libc symbols declared by hand.
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

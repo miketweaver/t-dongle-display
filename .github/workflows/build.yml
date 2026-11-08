@@ -1,0 +1,101 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck / dash syntax
+        run: |
+          shellcheck -s sh setup.sh scripts/package-firmware.sh
+          dash -n setup.sh
+      - name: versions agree (Cargo.toml, firmware, tag)
+        run: |
+          cli=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
+          fw=$(sed -n 's/^#define FW_VERSION "\(.*\)"/\1/p' firmware/tdongle_display/tdongle_display.ino)
+          echo "cli=$cli fw=$fw ref=$GITHUB_REF_NAME"
+          [ "$cli" = "$fw" ] || { echo "::error::cli $cli != firmware $fw"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            [ "v$cli" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != v$cli"; exit 1; }
+          fi
+
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl,      os: ubuntu-24.04,     asset: tdongle-x86_64-linux }
+          - { target: aarch64-unknown-linux-musl,     os: ubuntu-24.04-arm, asset: tdongle-aarch64-linux }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-24.04,     asset: tdongle-armv7-linux, apt: gcc-arm-linux-gnueabihf }
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: arm-linux-gnueabihf-gcc
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.apt
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      - working-directory: cli
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - run: |
+          mkdir -p out
+          cp cli/target/${{ matrix.target }}/release/tdongle out/${{ matrix.asset }}
+          file out/${{ matrix.asset }}
+      - if: matrix.target != 'armv7-unknown-linux-musleabihf'
+        name: smoke test
+        run: out/${{ matrix.asset }} --version && out/${{ matrix.asset }} --help >/dev/null
+      - uses: actions/upload-artifact@v4
+        with: { name: "${{ matrix.asset }}", path: "out/${{ matrix.asset }}" }
+
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-esp32-3.3.11-lovyangfx-1.2.28
+      - name: install esp32 core + LovyanGFX
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.3.11
+          arduino-cli lib install LovyanGFX@1.2.28
+      - run: scripts/package-firmware.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: tdongle-firmware.tar.gz, path: dist/tdongle-firmware.tar.gz }
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [check, cli, firmware]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, merge-multiple: true }
+      - name: assemble
+        run: |
+          mkdir release
+          cp artifacts/* setup.sh release/
+          chmod +x release/tdongle-* release/setup.sh
+          cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

@@ -1,0 +1,14 @@
+# T-Dongle-S3 running tdongle-display firmware (https://github.com/miketweaver/t-dongle-display)
+#
+# The firmware talks over the ESP32-S3's built-in USB-Serial/JTAG (303a:1001), the
+# same interface used for flashing, so the device keeps one identity throughout.
+#
+#  SYMLINK      /dev/tdongle
+#  uaccess      the logged-in desktop user gets read/write access (systemd-logind/elogind).
+#               Must be set before 73-seat-late.rules, hence the 70- file name.
+#  ID_MM_...    keep ModemManager from probing it with AT commands
+#
+# 303a:1001 is shared by every ESP32-S3/C3/C6 in USB-Serial/JTAG mode. To match only
+# your dongle, add  ATTRS{serial}=="<serial>",  (see `tdongle list`).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
+  SYMLINK+="tdongle", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

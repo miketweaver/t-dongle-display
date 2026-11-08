@@ -1,0 +1,5 @@
+/build/
+/dist/
+/cli/target/
+/.claude/
+/firmware/*/build/

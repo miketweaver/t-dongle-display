@@ -1,0 +1,14 @@
+# Optional: greet the dongle whenever it is plugged in.
+#
+# Install (needs the tdongle binary at /usr/local/bin/tdongle):
+#   sudo cp tdongle-hello@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# and append to the rule in /etc/udev/rules.d/70-tdongle.rules:
+#   , TAG+="systemd", ENV{SYSTEMD_WANTS}+="tdongle-hello@%k.service"
+[Unit]
+Description=Greet T-Dongle on %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/local/bin/tdongle -q -w 5 -p /dev/%I send "CLEAR black" "TEXT 2 4 1 cyan $(hostname)" "TEXT 2 20 1 white connected" "TEXT 2 36 1 gray $(date +%%H:%%M)"'
