@@ -14,7 +14,7 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: shellcheck / dash syntax
         run: |
           shellcheck -s sh setup.sh scripts/package-firmware.sh
@@ -41,7 +41,7 @@ jobs:
     env:
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: arm-linux-gnueabihf-gcc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - if: matrix.apt
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
       - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
@@ -54,15 +54,15 @@ jobs:
       - if: matrix.target != 'armv7-unknown-linux-musleabihf'
         name: smoke test
         run: out/${{ matrix.asset }} --version && out/${{ matrix.asset }} --help >/dev/null
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: "${{ matrix.asset }}", path: "out/${{ matrix.asset }}" }
 
   firmware:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: arduino/setup-arduino-cli@v2
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.arduino15
           key: arduino-esp32-3.3.11-lovyangfx-1.2.28
@@ -74,7 +74,7 @@ jobs:
           arduino-cli core install esp32:esp32@3.3.11
           arduino-cli lib install LovyanGFX@1.2.28
       - run: scripts/package-firmware.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: tdongle-firmware.tar.gz, path: dist/tdongle-firmware.tar.gz }
 
   release:
@@ -84,8 +84,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with: { path: artifacts, merge-multiple: true }
       - name: assemble
         run: |
