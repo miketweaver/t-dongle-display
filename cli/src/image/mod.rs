@@ -17,7 +17,7 @@ pub struct Rgba {
     pub px: Vec<u8>, // RGBA8, row-major
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Fit {
     Contain, // whole image visible, letterboxed
     Cover,   // fill the screen, crop the overflow
@@ -27,7 +27,9 @@ pub enum Fit {
 pub fn read_input(path: &str) -> Result<Vec<u8>, String> {
     if path == "-" {
         let mut v = Vec::new();
-        std::io::stdin().read_to_end(&mut v).map_err(|e| format!("stdin: {e}"))?;
+        std::io::stdin()
+            .read_to_end(&mut v)
+            .map_err(|e| format!("stdin: {e}"))?;
         Ok(v)
     } else {
         fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -65,20 +67,49 @@ fn external(path: &str, data: &[u8]) -> Result<Rgba, String> {
     };
     let first_frame = format!("{file}[0]");
     let tries: [(&str, Vec<&str>); 3] = [
-        ("magick", vec![first_frame.as_str(), "-auto-orient", "png:-"]),
-        ("convert", vec![first_frame.as_str(), "-auto-orient", "png:-"]),
-        ("ffmpeg", vec!["-v", "error", "-i", file.as_str(), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]),
+        (
+            "magick",
+            vec![first_frame.as_str(), "-auto-orient", "png:-"],
+        ),
+        (
+            "convert",
+            vec![first_frame.as_str(), "-auto-orient", "png:-"],
+        ),
+        (
+            "ffmpeg",
+            vec![
+                "-v",
+                "error",
+                "-i",
+                file.as_str(),
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "-",
+            ],
+        ),
     ];
     let mut result = Err("install ImageMagick or ffmpeg to open this file".to_string());
     for (bin, args) in tries.iter() {
-        match Command::new(bin).args(args).stdin(Stdio::null()).stderr(Stdio::piped()).output() {
+        match Command::new(bin)
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+        {
             Ok(out) if out.status.success() && out.stdout.starts_with(b"\x89PNG") => {
                 result = png::decode(&out.stdout);
                 break;
             }
             Ok(out) => {
                 let err = String::from_utf8_lossy(&out.stderr);
-                result = Err(format!("{bin}: {}", err.trim().lines().last().unwrap_or("conversion failed")));
+                result = Err(format!(
+                    "{bin}: {}",
+                    err.trim().lines().last().unwrap_or("conversion failed")
+                ));
                 break;
             }
             Err(_) => continue, // not installed
@@ -113,7 +144,11 @@ pub fn orient(img: Rgba, o: u8) -> Rgba {
             px[d..d + 4].copy_from_slice(&img.px[s..s + 4]);
         }
     }
-    Rgba { w: ow as u32, h: oh as u32, px }
+    Rgba {
+        w: ow as u32,
+        h: oh as u32,
+        px,
+    }
 }
 
 /// Scales `img` onto a `sw`x`sh` canvas over `bg`. Returns linear RGB floats (0..255).
@@ -122,11 +157,18 @@ pub fn render(img: &Rgba, sw: usize, sh: usize, fit: Fit, bg: [u8; 3]) -> Vec<[f
     let (dw, dh) = match fit {
         Fit::Stretch => (sw as f64, sh as f64),
         _ => {
-            let s = if fit == Fit::Contain { (sw as f64 / iw).min(sh as f64 / ih) } else { (sw as f64 / iw).max(sh as f64 / ih) };
+            let s = if fit == Fit::Contain {
+                (sw as f64 / iw).min(sh as f64 / ih)
+            } else {
+                (sw as f64 / iw).max(sh as f64 / ih)
+            };
             ((iw * s).round().max(1.0), (ih * s).round().max(1.0))
         }
     };
-    let (ox, oy) = (((sw as f64 - dw) / 2.0).round(), ((sh as f64 - dh) / 2.0).round());
+    let (ox, oy) = (
+        ((sw as f64 - dw) / 2.0).round(),
+        ((sh as f64 - dh) / 2.0).round(),
+    );
     let bgf = [bg[0] as f32, bg[1] as f32, bg[2] as f32];
     let mut out = vec![bgf; sw * sh];
     for y in 0..sh {
@@ -159,7 +201,11 @@ pub fn render(img: &Rgba, sw: usize, sh: usize, fit: Fit, bg: [u8; 3]) -> Vec<[f
                 }
             }
             let (a, inv) = (a / n, 1.0 / n);
-            out[y * sw + x] = [r * inv + bgf[0] * (1.0 - a), g * inv + bgf[1] * (1.0 - a), b * inv + bgf[2] * (1.0 - a)];
+            out[y * sw + x] = [
+                r * inv + bgf[0] * (1.0 - a),
+                g * inv + bgf[1] * (1.0 - a),
+                b * inv + bgf[2] * (1.0 - a),
+            ];
         }
     }
     out
@@ -204,10 +250,14 @@ pub fn to_rgb565_be(mut px: Vec<[f32; 3]>, w: usize, h: usize, dither: bool) -> 
 /// Writes RGB565 big-endian pixels back out as a binary PPM (for --save previews).
 pub fn rgb565_to_ppm(data: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
-    for c in data.chunks_exact(2) {
+    for c in data.as_chunks::<2>().0 {
         let v = u16::from_be_bytes([c[0], c[1]]);
         let (r, g, b) = ((v >> 11) & 31, (v >> 5) & 63, v & 31);
-        out.extend_from_slice(&[(r * 255 / 31) as u8, (g * 255 / 63) as u8, (b * 255 / 31) as u8]);
+        out.extend_from_slice(&[
+            (r * 255 / 31) as u8,
+            (g * 255 / 63) as u8,
+            (b * 255 / 31) as u8,
+        ]);
     }
     out
 }

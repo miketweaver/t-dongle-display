@@ -1,11 +1,24 @@
 [package]
 name = "tdongle"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2021"
 description = "Draw on a LilyGO T-Dongle-S3 screen over USB serial"
 license = "MIT"
 repository = "https://github.com/miketweaver/t-dongle-display"
 publish = false
+
+[lib]
+name = "tdongle"
+path = "src/lib.rs"
+
+# The short command and the long alias run the same code.
+[[bin]]
+name = "tdongle"
+path = "src/main.rs"
+
+[[bin]]
+name = "tdongle-display"
+path = "src/bin/tdongle-display.rs"
 
 # No dependencies on purpose: std + a handful of libc symbols declared by hand.
 [dependencies]

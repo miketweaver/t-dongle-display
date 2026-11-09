@@ -12,7 +12,14 @@
 #include <Preferences.h>
 
 #define FW_NAME    "tdongle-display"
-#define FW_VERSION "1.1.0"
+// The version lives in one place, cli/Cargo.toml. scripts/version-header.sh
+// writes it into version.h before a build; a bare Arduino build says "dev".
+#if __has_include("version.h")
+#include "version.h"
+#endif
+#ifndef FW_VERSION
+#define FW_VERSION "dev"
+#endif
 
 // ---- T-Dongle-S3 pins ----
 static constexpr int PIN_LCD_MOSI = 3;

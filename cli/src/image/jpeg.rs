@@ -5,9 +5,9 @@
 use super::Rgba;
 
 const ZIGZAG: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21,
-    28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61,
-    54, 47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 #[derive(Clone, Default)]
@@ -20,7 +20,10 @@ struct Huff {
 
 impl Huff {
     fn new(counts: &[u8; 16], vals: Vec<u8>) -> Huff {
-        let mut h = Huff { vals, ..Default::default() };
+        let mut h = Huff {
+            vals,
+            ..Default::default()
+        };
         let (mut code, mut k) = (0i32, 0i32);
         for l in 1..=16 {
             let n = counts[l - 1] as i32;
@@ -83,7 +86,10 @@ impl Bits<'_> {
                 return Err("JPEG: bad Huffman code".into());
             }
         }
-        h.vals.get((h.valptr[l] + code - h.mincode[l]) as usize).copied().ok_or_else(|| "JPEG: bad Huffman code".into())
+        h.vals
+            .get((h.valptr[l] + code - h.mincode[l]) as usize)
+            .copied()
+            .ok_or_else(|| "JPEG: bad Huffman code".into())
     }
     fn receive_extend(&mut self, s: u8) -> i32 {
         if s == 0 {
@@ -158,12 +164,20 @@ fn exif_orientation(d: &[u8]) -> Option<u8> {
     };
     let u16_at = |o: usize| -> Option<u16> {
         let b = t.get(o..o + 2)?;
-        Some(if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) })
+        Some(if le {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        })
     };
     let u32_at = |o: usize| -> Option<u32> {
         let b = t.get(o..o + 4)?;
         let a = [b[0], b[1], b[2], b[3]];
-        Some(if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) })
+        Some(if le {
+            u32::from_le_bytes(a)
+        } else {
+            u32::from_be_bytes(a)
+        })
     };
     let ifd = u32_at(4)? as usize;
     let n = u16_at(ifd)? as usize;
@@ -192,7 +206,11 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
     let mut cos = [[0f32; 8]; 8];
     for (x, row) in cos.iter_mut().enumerate() {
         for (u, c) in row.iter_mut().enumerate() {
-            let cu = if u == 0 { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
+            let cu = if u == 0 {
+                std::f32::consts::FRAC_1_SQRT_2
+            } else {
+                1.0
+            };
             *c = cu * (((2 * x + 1) * u) as f32 * std::f32::consts::PI / 16.0).cos();
         }
     }
@@ -213,7 +231,9 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
             break;
         }
         let len = u16::from_be_bytes([d[pos + 2], d[pos + 3]]) as usize;
-        let seg = d.get(pos + 4..pos + 2 + len).ok_or("JPEG: truncated segment")?;
+        let seg = d
+            .get(pos + 4..pos + 2 + len)
+            .ok_or("JPEG: truncated segment")?;
         pos += 2 + len;
         match m {
             0xE1 => {
@@ -232,7 +252,11 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                     let n = if pq == 0 { 64 } else { 128 };
                     let body = s.get(1..1 + n).ok_or("JPEG: truncated DQT")?;
                     for k in 0..64 {
-                        qt[tq][k] = if pq == 0 { body[k] as f32 } else { u16::from_be_bytes([body[2 * k], body[2 * k + 1]]) as f32 };
+                        qt[tq][k] = if pq == 0 {
+                            body[k] as f32
+                        } else {
+                            u16::from_be_bytes([body[2 * k], body[2 * k + 1]]) as f32
+                        };
                     }
                     s = &s[1 + n..];
                 }
@@ -272,7 +296,9 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                 w = u16::from_be_bytes([seg[3], seg[4]]) as usize;
                 let n = seg[5] as usize;
                 if w == 0 || h == 0 || (n != 1 && n != 3) {
-                    return Err(format!("JPEG: unsupported layout ({n} components, {w}x{h})"));
+                    return Err(format!(
+                        "JPEG: unsupported layout ({n} components, {w}x{h})"
+                    ));
                 }
                 if w * h > 64_000_000 {
                     return Err(format!("JPEG: {w}x{h} is too large"));
@@ -295,7 +321,9 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                     c.plane = vec![0u8; c.pw * mcuy * c.v * 8];
                 }
             }
-            0xC2 | 0xC6 | 0xCA | 0xCE => return Err("JPEG: progressive JPEG is not supported".into()),
+            0xC2 | 0xC6 | 0xCA | 0xCE => {
+                return Err("JPEG: progressive JPEG is not supported".into())
+            }
             0xC3 | 0xC5 | 0xC7 | 0xC9 | 0xCB | 0xCD | 0xCF => {
                 return Err("JPEG: lossless/arithmetic-coded JPEG is not supported".into())
             }
@@ -310,13 +338,21 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                 let mut scan = Vec::new();
                 for i in 0..ns {
                     let (cid, t) = (seg[1 + i * 2], seg[2 + i * 2]);
-                    let ci = comps.iter().position(|c| c.id == cid).ok_or("JPEG: scan references unknown component")?;
+                    let ci = comps
+                        .iter()
+                        .position(|c| c.id == cid)
+                        .ok_or("JPEG: scan references unknown component")?;
                     comps[ci].td = (t >> 4) as usize & 3;
                     comps[ci].ta = (t & 15) as usize & 3;
                     comps[ci].pred = 0;
                     scan.push(ci);
                 }
-                let mut bits = Bits { d, pos, acc: 0, n: 0 };
+                let mut bits = Bits {
+                    d,
+                    pos,
+                    acc: 0,
+                    n: 0,
+                };
                 let (mcux, mcuy) = (w.div_ceil(8 * hmax), h.div_ceil(8 * vmax));
                 // Non-interleaved scans walk one component's blocks; interleaved walk MCUs.
                 let units: Vec<(usize, usize)> = if ns == 1 {
@@ -325,7 +361,9 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                     let bh = (h * c.v).div_ceil(vmax).div_ceil(8);
                     (0..bh).flat_map(|y| (0..bw).map(move |x| (x, y))).collect()
                 } else {
-                    (0..mcuy).flat_map(|y| (0..mcux).map(move |x| (x, y))).collect()
+                    (0..mcuy)
+                        .flat_map(|y| (0..mcux).map(move |x| (x, y)))
+                        .collect()
                 };
                 let mut coef = [0f32; 64];
                 for (ui, &(ux, uy)) in units.iter().enumerate() {
@@ -336,7 +374,11 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                         }
                     }
                     for &ci in &scan {
-                        let (bh_, bv_) = if ns == 1 { (1, 1) } else { (comps[ci].h, comps[ci].v) };
+                        let (bh_, bv_) = if ns == 1 {
+                            (1, 1)
+                        } else {
+                            (comps[ci].h, comps[ci].v)
+                        };
                         for by in 0..bv_ {
                             for bx in 0..bh_ {
                                 coef.fill(0.0);
@@ -363,7 +405,11 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
                                     coef[ZIGZAG[k]] = bits.receive_extend(s) as f32 * q[k];
                                     k += 1;
                                 }
-                                let (px, py) = if ns == 1 { (ux * 8, uy * 8) } else { ((ux * c.h + bx) * 8, (uy * c.v + by) * 8) };
+                                let (px, py) = if ns == 1 {
+                                    (ux * 8, uy * 8)
+                                } else {
+                                    ((ux * c.h + bx) * 8, (uy * c.v + by) * 8)
+                                };
                                 let pw = c.pw;
                                 if (py + 7) * pw + px + 7 < c.plane.len() {
                                     idct_block(&coef, &mut c.plane[py * pw + px..], pw, &cos);
@@ -382,7 +428,11 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
         return Err("JPEG: no image data".into());
     }
 
-    let mut out = Rgba { w: w as u32, h: h as u32, px: vec![255u8; w * h * 4] };
+    let mut out = Rgba {
+        w: w as u32,
+        h: h as u32,
+        px: vec![255u8; w * h * 4],
+    };
     let ycc = comps.len() == 3 && adobe_transform != Some(0);
     for y in 0..h {
         for x in 0..w {
@@ -394,7 +444,9 @@ pub fn decode(d: &[u8]) -> Result<(Rgba, u8), String> {
             } else if ycc {
                 let (yy, cb, cr) = (s(&comps[0]), s(&comps[1]) - 128.0, s(&comps[2]) - 128.0);
                 out.px[o] = (yy + 1.402 * cr).round().clamp(0.0, 255.0) as u8;
-                out.px[o + 1] = (yy - 0.344136 * cb - 0.714136 * cr).round().clamp(0.0, 255.0) as u8;
+                out.px[o + 1] = (yy - 0.344136 * cb - 0.714136 * cr)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
                 out.px[o + 2] = (yy + 1.772 * cb).round().clamp(0.0, 255.0) as u8;
             } else {
                 out.px[o] = s(&comps[0]) as u8;

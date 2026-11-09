@@ -6,8 +6,7 @@ set -eu
 cd "$(dirname "$0")/.."
 FQBN="esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB"
 BUILD=build/firmware
-VERSION=$(sed -n 's/^#define FW_VERSION "\(.*\)"/\1/p' firmware/tdongle_display/tdongle_display.ino)
-[ -n "$VERSION" ] || { echo "FW_VERSION not found" >&2; exit 1; }
+VERSION=$(scripts/version-header.sh)   # from cli/Cargo.toml
 
 rm -rf "$BUILD" && mkdir -p "$BUILD" dist
 arduino-cli compile -b "$FQBN" --build-path "$BUILD" firmware/tdongle_display

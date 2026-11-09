@@ -3,3 +3,4 @@
 /cli/target/
 /.claude/
 /firmware/*/build/
+/firmware/*/version.h

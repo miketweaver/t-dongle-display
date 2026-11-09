@@ -5,7 +5,8 @@
 #   sh setup.sh [options]
 #
 # What it does, touching the OS as little as possible:
-#   1. Installs the `tdongle` CLI (a static binary) to ~/.local/bin. No root needed.
+#   1. Installs the `tdongle` CLI (a static binary) to ~/.local/bin, plus a
+#      `tdongle-display` alias symlink. No root needed.
 #   2. Only if your user can't open the serial port: installs one udev rule,
 #      /etc/udev/rules.d/70-tdongle.rules (asks for sudo first).
 #   3. Flashes the tdongle-display firmware with a pinned, checksum-verified esptool
@@ -139,7 +140,9 @@ esac
 # ---------------------------------------------------------------- uninstall --
 if [ "$UNINSTALL" = 1 ]; then
   step "Uninstalling"
-  if [ -e "$BIN_DIR/tdongle" ]; then rm -f "$BIN_DIR/tdongle"; ok "removed $BIN_DIR/tdongle"; fi
+  for f in tdongle tdongle-display; do
+    if [ -e "$BIN_DIR/$f" ] || [ -L "$BIN_DIR/$f" ]; then rm -f "$BIN_DIR/$f"; ok "removed $BIN_DIR/$f"; fi
+  done
   if [ -e "$RULE_PATH" ]; then
     if ask "Remove $RULE_PATH (needs sudo)?"; then
       as_root rm -f "$RULE_PATH"
@@ -178,8 +181,9 @@ fi
 step "Installing the tdongle CLI"
 mkdir -p "$BIN_DIR"
 cp "$WORK/$CLI_ASSET" "$BIN_DIR/tdongle.new" && chmod 0755 "$BIN_DIR/tdongle.new" && mv -f "$BIN_DIR/tdongle.new" "$BIN_DIR/tdongle"
+ln -sf tdongle "$BIN_DIR/tdongle-display"   # the long alias; same binary
 TD="$BIN_DIR/tdongle"
-ok "$TD ($("$TD" --version))"
+ok "$TD ($("$TD" --version)), alias tdongle-display"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR is not on your PATH; add it, or run $TD directly" ;; esac
 
 # ------------------------------------------------------------------- device --
@@ -240,7 +244,9 @@ fi
 mkdir -p "$WORK/fw"
 tar xzf "$WORK/tdongle-firmware.tar.gz" -C "$WORK/fw"
 FW_VER=$(cat "$WORK/fw/VERSION" 2>/dev/null || echo "?")
-CUR=$("$TD" -p "$PORT" -t 800 info 2>/dev/null | awk '$2=="tdongle-display"{print $3}') || true
+# Version of the running firmware, if any (empty for other firmware or none).
+fw_version() { "$TD" -p "$PORT" -t 800 status --json 2>/dev/null | sed -n 's/^ *"version": "\(.*\)",*$/\1/p'; }
+CUR=$(fw_version) || true
 
 if [ "$DO_FLASH" = 0 ]; then
   step "Skipping firmware flash (--no-flash)"
@@ -272,10 +278,10 @@ fi
 
 # ------------------------------------------------------------------- verify --
 step "Talking to the dongle"
-INFO=$("$TD" -p "$PORT" -w 15 info) || die "the dongle didn't answer on $PORT"
-ok "$INFO"
+"$TD" -p "$PORT" -w 15 ping -q || die "the dongle didn't answer on $PORT"
+ok "tdongle-display $(fw_version) on $PORT"
 "$TD" -p "$PORT" -q msg "Hello $(hostname 2>/dev/null || uname -n)" || true
 
 DEV=$PORT; [ -e /dev/tdongle ] && DEV=/dev/tdongle
 printf '\n%sReady.%s Try:\n' "$G" "$N"
-printf '  tdongle "Hello world"\n  tdongle send "CLEAR navy" "TEXT 4 4 2 yellow Hi"\n  echo "MSG from the shell" > %s\n  tdongle --help\n' "$DEV"
+printf '  tdongle                      # status\n  tdongle "Hello world"\n  tdongle image photo.jpg\n  echo "MSG from the shell" > %s\n  tdongle --help\n' "$DEV"

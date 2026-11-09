@@ -22,11 +22,18 @@ pub fn decode(d: &[u8]) -> Result<Rgba, String> {
         while d.get(*pos).is_some_and(|c| c.is_ascii_digit()) {
             *pos += 1
         }
-        std::str::from_utf8(&d[start..*pos]).unwrap().parse().map_err(|_| "PNM: bad number".into())
+        std::str::from_utf8(&d[start..*pos])
+            .unwrap()
+            .parse()
+            .map_err(|_| "PNM: bad number".into())
     };
     let w = header(&mut pos)?;
     let h = header(&mut pos)?;
-    let max = if kind == b'1' || kind == b'4' { 1 } else { header(&mut pos)? };
+    let max = if kind == b'1' || kind == b'4' {
+        1
+    } else {
+        header(&mut pos)?
+    };
     if w == 0 || h == 0 || max == 0 || max > 65535 || (w as u64) * (h as u64) > 64_000_000 {
         return Err("PNM: bad dimensions".into());
     }
@@ -54,7 +61,12 @@ pub fn decode(d: &[u8]) -> Result<Rgba, String> {
             let bytes = if max > 255 { 2 } else { 1 };
             let raw = d.get(pos..pos + n * bytes).ok_or("PNM: truncated")?;
             if bytes == 2 {
-                vals.extend(raw.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]]) as u32));
+                vals.extend(
+                    raw.as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| u16::from_be_bytes([c[0], c[1]]) as u32),
+                );
             } else {
                 vals.extend(raw.iter().map(|&b| b as u32));
             }
@@ -64,10 +76,23 @@ pub fn decode(d: &[u8]) -> Result<Rgba, String> {
     let mut px = Vec::with_capacity((w * h) as usize * 4);
     for i in 0..(w * h) as usize {
         if ch == 3 {
-            px.extend_from_slice(&[scale(vals[i * 3]), scale(vals[i * 3 + 1]), scale(vals[i * 3 + 2]), 255]);
+            px.extend_from_slice(&[
+                scale(vals[i * 3]),
+                scale(vals[i * 3 + 1]),
+                scale(vals[i * 3 + 2]),
+                255,
+            ]);
         } else {
             // PBM: 1 = black
-            let g = if kind == b'1' || kind == b'4' { if vals[i] == 1 { 0 } else { 255 } } else { scale(vals[i]) };
+            let g = if kind == b'1' || kind == b'4' {
+                if vals[i] == 1 {
+                    0
+                } else {
+                    255
+                }
+            } else {
+                scale(vals[i])
+            };
             px.extend_from_slice(&[g, g, g, 255]);
         }
     }

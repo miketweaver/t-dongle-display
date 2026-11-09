@@ -9,11 +9,19 @@ struct Bits<'a> {
 
 impl<'a> Bits<'a> {
     fn new(d: &'a [u8]) -> Self {
-        Bits { d, pos: 0, bit: 0, nbits: 0 }
+        Bits {
+            d,
+            pos: 0,
+            bit: 0,
+            nbits: 0,
+        }
     }
     fn need(&mut self, n: u32) -> Result<(), String> {
         while self.nbits < n {
-            let b = *self.d.get(self.pos).ok_or("deflate: unexpected end of data")?;
+            let b = *self
+                .d
+                .get(self.pos)
+                .ok_or("deflate: unexpected end of data")?;
             self.pos += 1;
             self.bit |= (b as u32) << self.nbits;
             self.nbits += 8;
@@ -80,12 +88,29 @@ impl Huff {
     }
 }
 
-const LEN_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
-const LEN_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
-const DIST_BASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
-const DIST_EXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const LEN_BASE: [u16; 29] = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
+];
+const LEN_EXTRA: [u8; 29] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+];
+const DIST_BASE: [u16; 30] = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+];
+const DIST_EXTRA: [u8; 30] = [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
+];
 
-fn inflate_block(b: &mut Bits, out: &mut Vec<u8>, lit: &Huff, dist: &Huff, limit: usize) -> Result<(), String> {
+fn inflate_block(
+    b: &mut Bits,
+    out: &mut Vec<u8>,
+    lit: &Huff,
+    dist: &Huff,
+    limit: usize,
+) -> Result<(), String> {
     loop {
         let sym = lit.decode(b)?;
         if sym < 256 {
@@ -120,7 +145,10 @@ fn inflate_block(b: &mut Bits, out: &mut Vec<u8>, lit: &Huff, dist: &Huff, limit
 
 /// Decodes a zlib stream. `limit` caps the output size (guards against bombs).
 pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
-    if data.len() < 2 || data[0] & 0x0f != 8 || ((data[0] as u16) << 8 | data[1] as u16) % 31 != 0 {
+    if data.len() < 2
+        || data[0] & 0x0f != 8
+        || !((data[0] as u16) << 8 | data[1] as u16).is_multiple_of(31)
+    {
         return Err("zlib: bad header".into());
     }
     if data[1] & 0x20 != 0 {
@@ -140,7 +168,9 @@ pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
                 }
                 // Bit buffer is byte aligned and empty now (we consumed exactly 32 bits).
                 let end = b.pos + len;
-                let chunk = b.d.get(b.pos..end).ok_or("deflate: stored block truncated")?;
+                let chunk =
+                    b.d.get(b.pos..end)
+                        .ok_or("deflate: stored block truncated")?;
                 out.extend_from_slice(chunk);
                 b.pos = end;
             }
@@ -158,7 +188,9 @@ pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
                 let hlit = b.get(5)? as usize + 257;
                 let hdist = b.get(5)? as usize + 1;
                 let hclen = b.get(4)? as usize + 4;
-                const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+                const ORDER: [usize; 19] = [
+                    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+                ];
                 let mut cl = [0u8; 19];
                 for &o in ORDER.iter().take(hclen) {
                     cl[o] = b.get(3)? as u8;

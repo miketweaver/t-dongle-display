@@ -18,7 +18,9 @@ pub fn decode(data: &[u8]) -> Result<Rgba, String> {
     while pos + 8 <= data.len() {
         let len = be32(&data[pos..]) as usize;
         let kind = &data[pos + 4..pos + 8];
-        let body = data.get(pos + 8..pos + 8 + len).ok_or("PNG: truncated chunk")?;
+        let body = data
+            .get(pos + 8..pos + 8 + len)
+            .ok_or("PNG: truncated chunk")?;
         match kind {
             b"IHDR" => {
                 if len < 13 {
@@ -30,7 +32,14 @@ pub fn decode(data: &[u8]) -> Result<Rgba, String> {
                 ctype = body[9];
                 interlace = body[12];
             }
-            b"PLTE" => palette = body.chunks_exact(3).map(|c| [c[0], c[1], c[2], 255]).collect(),
+            b"PLTE" => {
+                palette = body
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|c| [c[0], c[1], c[2], 255])
+                    .collect()
+            }
             b"tRNS" => trns = Some(body.to_vec()),
             b"IDAT" => idat.extend_from_slice(body),
             b"IEND" => break,
@@ -77,8 +86,12 @@ pub fn decode(data: &[u8]) -> Result<Rgba, String> {
     let limit = (h as usize + 64) * (row_bytes(w as usize) + 1) + 1024;
     let raw = inflate::zlib_decompress(&idat, limit)?;
 
-    let mut out = Rgba { w, h, px: vec![0u8; w as usize * h as usize * 4] };
-    let max = ((1u32 << depth) - 1) as u32;
+    let mut out = Rgba {
+        w,
+        h,
+        px: vec![0u8; w as usize * h as usize * 4],
+    };
+    let max = (1u32 << depth) - 1;
     let trans_key: Option<[u16; 3]> = match (&trns, ctype) {
         (Some(t), 0) if t.len() >= 2 => Some([u16::from_be_bytes([t[0], t[1]]); 3]),
         (Some(t), 2) if t.len() >= 6 => Some([
@@ -91,7 +104,15 @@ pub fn decode(data: &[u8]) -> Result<Rgba, String> {
 
     // (x0, y0, dx, dy) per pass
     let passes: &[(usize, usize, usize, usize)] = if interlace == 1 {
-        &[(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+        &[
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        ]
     } else {
         &[(0, 0, 1, 1)]
     };
@@ -107,7 +128,9 @@ pub fn decode(data: &[u8]) -> Result<Rgba, String> {
         let mut cur = vec![0u8; rb];
         for py in 0..ph {
             let ft = *raw.get(off).ok_or("PNG: image data truncated")?;
-            let src = raw.get(off + 1..off + 1 + rb).ok_or("PNG: image data truncated")?;
+            let src = raw
+                .get(off + 1..off + 1 + rb)
+                .ok_or("PNG: image data truncated")?;
             off += 1 + rb;
             for i in 0..rb {
                 let a = if i >= bpp { cur[i - bpp] as i16 } else { 0 };
@@ -158,14 +181,22 @@ pub fn decode(data: &[u8]) -> Result<Rgba, String> {
                 let rgba: [u8; 4] = match ctype {
                     0 => {
                         let (g, raw) = sample(0);
-                        let a = if trans_key.is_some_and(|k| k[0] == raw) { 0 } else { 255 };
+                        let a = if trans_key.is_some_and(|k| k[0] == raw) {
+                            0
+                        } else {
+                            255
+                        };
                         [g, g, g, a]
                     }
                     2 => {
                         let (r, rr) = sample(0);
                         let (g, rg) = sample(1);
                         let (b, rb2) = sample(2);
-                        let a = if trans_key == Some([rr, rg, rb2]) { 0 } else { 255 };
+                        let a = if trans_key == Some([rr, rg, rb2]) {
+                            0
+                        } else {
+                            255
+                        };
                         [r, g, b, a]
                     }
                     3 => {

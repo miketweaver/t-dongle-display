@@ -1,5 +1,8 @@
 name: build
 
+# GitHub-hosted on purpose: this repository is public, and a self-hosted
+# runner would execute workflow code from fork pull requests on the homelab.
+
 on:
   push:
     branches: [main]
@@ -10,23 +13,26 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - name: shellcheck / dash syntax
         run: |
-          shellcheck -s sh setup.sh scripts/package-firmware.sh
+          shellcheck -s sh setup.sh scripts/*.sh
           dash -n setup.sh
-      - name: versions agree (Cargo.toml, firmware, tag)
+      - name: tag matches the one version literal (cli/Cargo.toml)
         run: |
-          cli=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
-          fw=$(sed -n 's/^#define FW_VERSION "\(.*\)"/\1/p' firmware/tdongle_display/tdongle_display.ino)
-          echo "cli=$cli fw=$fw ref=$GITHUB_REF_NAME"
-          [ "$cli" = "$fw" ] || { echo "::error::cli $cli != firmware $fw"; exit 1; }
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
+          echo "version=$v ref=$GITHUB_REF_NAME"
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            [ "v$cli" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != v$cli"; exit 1; }
+            [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != v$v"; exit 1; }
           fi
 
   cli:
@@ -34,37 +40,67 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-unknown-linux-musl,      os: ubuntu-24.04,     asset: tdongle-x86_64-linux }
-          - { target: aarch64-unknown-linux-musl,     os: ubuntu-24.04-arm, asset: tdongle-aarch64-linux }
-          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-24.04,     asset: tdongle-armv7-linux, apt: gcc-arm-linux-gnueabihf }
+          - { target: x86_64-unknown-linux-musl,      os: ubuntu-24.04,     asset: tdongle-x86_64-linux,  native: true, lint: true }
+          - { target: aarch64-unknown-linux-musl,     os: ubuntu-24.04-arm, asset: tdongle-aarch64-linux, native: true }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-24.04,     asset: tdongle-armv7-linux,   apt: gcc-arm-linux-gnueabihf }
     runs-on: ${{ matrix.os }}
     env:
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: arm-linux-gnueabihf-gcc
     steps:
+      - name: Isolate HOME for this job (keep the preinstalled Rust toolchain)
+        run: |
+          echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - if: matrix.apt
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
-      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      - run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target ${{ matrix.target }}
+          rustup default stable
+      - if: matrix.lint
+        working-directory: cli
+        run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
+      - if: matrix.native
+        working-directory: cli
+        run: cargo test --locked
       - working-directory: cli
         run: cargo build --release --locked --target ${{ matrix.target }}
       - run: |
           mkdir -p out
           cp cli/target/${{ matrix.target }}/release/tdongle out/${{ matrix.asset }}
           file out/${{ matrix.asset }}
-      - if: matrix.target != 'armv7-unknown-linux-musleabihf'
+      - if: matrix.native
         name: smoke test
-        run: out/${{ matrix.asset }} --version && out/${{ matrix.asset }} --help >/dev/null
+        run: |
+          b=cli/target/${{ matrix.target }}/release
+          $b/tdongle --version
+          $b/tdongle-display --version
+          $b/tdongle --help >/dev/null
+          $b/tdongle image --help >/dev/null
+          $b/tdongle --skill >/dev/null
       - uses: actions/upload-artifact@v7
         with: { name: "${{ matrix.asset }}", path: "out/${{ matrix.asset }}" }
 
   firmware:
     runs-on: ubuntu-24.04
     steps:
+      - name: Isolate HOME for this job; keep Arduino data in the (cached) temp dir
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+          echo "ARDUINO_DIRECTORIES_DATA=$RUNNER_TEMP/arduino15" >> "$GITHUB_ENV"
+          echo "ARDUINO_DIRECTORIES_USER=$RUNNER_TEMP/arduino-user" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - uses: arduino/setup-arduino-cli@v2
       - uses: actions/cache@v6
         with:
-          path: ~/.arduino15
+          path: |
+            ${{ runner.temp }}/arduino15
+            ${{ runner.temp }}/arduino-user
           key: arduino-esp32-3.3.11-lovyangfx-1.2.28
       - name: install esp32 core + LovyanGFX
         run: |
@@ -85,6 +121,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - uses: actions/download-artifact@v8
         with: { path: artifacts, merge-multiple: true }
       - name: assemble
@@ -97,5 +134,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/* \
+          gh release create "$GITHUB_REF_NAME" release/* -R "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

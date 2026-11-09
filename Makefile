@@ -7,10 +7,12 @@ TARGET ?= x86_64-unknown-linux-musl
 .PHONY: firmware flash cli dist install monitor clean
 
 firmware:
+	scripts/version-header.sh >/dev/null
 	arduino-cli compile -b "$(FQBN)" $(SKETCH)
 
 # esptool resets the S3 into the ROM bootloader over USB-Serial/JTAG: no button needed.
 flash:
+	scripts/version-header.sh >/dev/null
 	arduino-cli compile -b "$(FQBN)" --upload -p $(PORT) $(SKETCH)
 
 cli:
@@ -18,6 +20,7 @@ cli:
 
 # Same artifacts a release has, for `setup.sh --from dist`.
 dist: cli
+	rm -rf dist
 	scripts/package-firmware.sh
 	cp cli/target/$(TARGET)/release/tdongle dist/tdongle-$(firstword $(subst -, ,$(TARGET)))-linux
 
