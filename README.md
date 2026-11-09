@@ -7,6 +7,7 @@ You write lines of text to it, and it draws them.
 ```sh
 tdongle "Build passed"
 tdongle send "CLEAR navy" "TEXT 4 4 2 yellow Hi" "FCIRCLE 40 80 20 orange"
+tdongle image photo.jpg
 echo "MSG no tools needed" > /dev/ttyACM0
 ```
 
@@ -43,6 +44,7 @@ tdongle <text...>                       big centered, word-wrapped message (same
 tdongle log <text...>                   scrolling console line
 tdongle text <x> <y> <size> <color> <text...>
 tdongle clear [color]
+tdongle image <file|-> [--fit|--fill|--stretch] [--rot auto|keep|0-3] [--bg color] [--no-dither] [--save out.ppm]
 tdongle send <line>... | -              raw protocol lines, `-` = from stdin
 tdongle info | ping | temp
 tdongle sleep [secs] | wake | bl <0-255> | led <color> [0-31]
@@ -62,6 +64,25 @@ tdongle -q log "$(date +%T) backup ok"                    # from cron
 make && tdongle -q send "CLEAR darkgreen" "MSG ok" || tdongle -q send "CLEAR red" "MSG FAIL"
 tdongle -w 10 msg "booted"                                # wait for the dongle (e.g. at boot)
 ```
+
+## Images
+
+```sh
+tdongle image photo.jpg                  # letterboxed; wide images switch the screen to landscape
+tdongle image logo.png --fill            # fill the screen, crop the overflow
+tdongle image chart.png --rot keep       # keep the current rotation
+curl -s https://example.com/x.png | tdongle image -
+tdongle image photo.jpg --save preview.ppm   # see the result without a dongle
+```
+
+- **Built in:** PNG (every color type and bit depth, interlaced, transparency), baseline JPEG
+  (including the EXIF orientation phones write), BMP, and PPM/PGM. The CLI decodes these itself, no libraries.
+- **Other formats** (progressive JPEG, GIF, WebP, HEIC…) go through ImageMagick (`magick`/`convert`)
+  or `ffmpeg` if one of them is installed.
+- **Processing:** images are scaled with an area filter, composited over `--bg` where transparent, and
+  Floyd–Steinberg dithered to the panel's RGB565 colors. A full-screen push takes about 0.3 s.
+- `--rot auto` (the default) uses landscape (rotation 1) for images wider than tall, and portrait otherwise.
+  Use `--rot 3` if your landscape image comes out upside down. The rotation stays in effect for later commands.
 
 ## How it works
 
@@ -123,7 +144,20 @@ Coordinates are pixels. Rotation 0 is portrait 80×160.
 | `LED color [0-31]` | onboard APA102 RGB LED |
 | `SPLASH` | redraw the boot screen |
 | `PING` → `PONG` · `INFO` · `TEMP` · `HELP` | queries |
+| `IMG x y w h` | binary image upload, see below |
 | `GPIO pin 0\|1` | debug: drive a pin |
+
+### `IMG`: image upload
+
+1. Host: `IMG x y w h\n` (at most 12800 pixels; a full screen is 80×160 or 160×80).
+2. Device: `READY <chunk>`.
+3. Host sends `w*h*2` bytes of RGB565, **big-endian** (high byte first), rows top to bottom, in
+   pieces of at most `<chunk>` bytes. After each piece except the last, it waits for `NEXT`.
+4. Device draws the image, then replies `OK`. If more than 2 s pass without data, it replies `ERR IMG: timeout…`.
+
+The handshake is required. The ESP32-S3 USB-Serial/JTAG driver silently drops data when its
+receive buffer is full, instead of making the host wait. Use a raw-mode tty (`stty raw -echo`),
+or just `tdongle image`.
 
 ## Optional extras
 

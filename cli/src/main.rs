@@ -2,6 +2,8 @@
 //!
 //! Zero dependencies: std plus five libc functions declared below. Linux only.
 
+mod image;
+
 use std::env;
 use std::ffi::{c_int, c_ulong};
 use std::fs::{self, File, OpenOptions};
@@ -94,6 +96,10 @@ impl Port {
     fn write_line(&mut self, line: &str) -> io::Result<()> {
         let mut data = line.as_bytes().to_vec();
         data.push(b'\n');
+        self.write_bytes(&data)
+    }
+
+    fn write_bytes(&mut self, data: &[u8]) -> io::Result<()> {
         let mut off = 0;
         let deadline = Instant::now() + Duration::from_secs(5);
         while off < data.len() {
@@ -261,6 +267,12 @@ COMMANDS:
     log <text...>            Append a line to a scrolling console
     text <x> <y> <size> <color> <text...>
     clear [color]            Fill the screen (default black)
+    image <file|-> [opts]    Show an image (PNG, JPEG, BMP, PPM; others via ImageMagick/ffmpeg)
+        --fit | --fill | --stretch   letterbox (default), crop to fill, or distort
+        --rot auto|keep|0-3          screen rotation; auto = landscape for wide images
+        --bg <color>                 letterbox color (default black)
+        --no-dither                  plain RGB565 quantization
+        --save <out.ppm>             write the converted image instead of sending it
     send <line>... | -       Raw protocol lines; `-` reads them from stdin
     info | ping | temp       Query the device
     sleep [secs]             Screen off now, or set the idle timeout (0 = never)
@@ -384,6 +396,142 @@ fn build_lines(rest: &[String]) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+// --------------------------------------------------------------- image ----
+struct ImageOpts {
+    path: String,
+    fit: image::Fit,
+    rot: Option<u8>, // None = keep current
+    bg: [u8; 3],
+    dither: bool,
+    save: Option<String>,
+}
+
+fn parse_color(s: &str) -> Option<[u8; 3]> {
+    const NAMED: &[(&str, u32)] = &[
+        ("black", 0x000000), ("white", 0xFFFFFF), ("red", 0xFF0000), ("green", 0x00FF00), ("blue", 0x0000FF),
+        ("yellow", 0xFFFF00), ("cyan", 0x00FFFF), ("magenta", 0xFF00FF), ("orange", 0xFF8000), ("purple", 0x8000FF),
+        ("gray", 0x808080), ("grey", 0x808080), ("pink", 0xFF60A0), ("navy", 0x000080), ("darkgreen", 0x006400),
+        ("brown", 0x8B4513),
+    ];
+    let t = s.trim().to_ascii_lowercase();
+    let v = match NAMED.iter().find(|(n, _)| *n == t) {
+        Some((_, v)) => *v,
+        None => {
+            let h = t.trim_start_matches('#').trim_start_matches("0x");
+            if h.len() != 6 {
+                return None;
+            }
+            u32::from_str_radix(h, 16).ok()?
+        }
+    };
+    Some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
+}
+
+fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
+    let usage = "usage: tdongle image <file|-> [--fit|--fill|--stretch] [--rot auto|keep|0-3] [--bg color] [--no-dither] [--save out.ppm]";
+    let mut o = ImageOpts { path: String::new(), fit: image::Fit::Contain, rot: Some(255), bg: [0; 3], dither: true, save: None };
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--fit" => o.fit = image::Fit::Contain,
+            "--fill" => o.fit = image::Fit::Cover,
+            "--stretch" => o.fit = image::Fit::Stretch,
+            "--no-dither" => o.dither = false,
+            "--rot" => {
+                o.rot = match it.next().map(|s| s.as_str()) {
+                    Some("auto") => Some(255),
+                    Some("keep") => None,
+                    Some(n @ ("0" | "1" | "2" | "3")) => Some(n.parse().unwrap()),
+                    _ => return Err("--rot: auto, keep or 0-3".into()),
+                }
+            }
+            "--bg" => o.bg = it.next().and_then(|c| parse_color(c)).ok_or("--bg: color name or RRGGBB")?,
+            "--save" => o.save = Some(it.next().ok_or("--save needs a file name")?.clone()),
+            s if s.starts_with("--") => return Err(format!("unknown image option {s}\n{usage}")),
+            _ if o.path.is_empty() => o.path = a.clone(),
+            _ => return Err(usage.into()),
+        }
+    }
+    if o.path.is_empty() {
+        return Err(usage.into());
+    }
+    Ok(o)
+}
+
+/// Screen size for a rotation of the 80x160 panel.
+fn dims_for_rot(rot: u8) -> (usize, usize) {
+    if rot % 2 == 0 {
+        (80, 160)
+    } else {
+        (160, 80)
+    }
+}
+
+/// "OK tdongle-display 1.1.0 80x160 rot=0 ..." -> rotation
+fn parse_rot(info: &str) -> Option<u8> {
+    info.split_whitespace().find_map(|t| t.strip_prefix("rot=")?.parse().ok())
+}
+
+/// Loads and converts the image; with a port, rotates the screen and pushes it.
+fn cmd_image(o: &ImageOpts, port: Option<&mut Port>, timeout: Duration) -> Result<u8, (u8, String)> {
+    let data = image::read_input(&o.path).map_err(|e| (3, e))?;
+    let img = image::load(&o.path, &data).map_err(|e| (3, e))?;
+    let auto_rot = if img.w > img.h { 1 } else { 0 };
+    let Some(port) = port else {
+        // --save: no device needed
+        let rot = match o.rot {
+            Some(255) => auto_rot,
+            Some(r) => r,
+            None => 0,
+        };
+        let (w, h) = dims_for_rot(rot);
+        let px = image::to_rgb565_be(image::render(&img, w, h, o.fit, o.bg), w, h, o.dither);
+        let path = o.save.as_deref().unwrap();
+        fs::write(path, image::rgb565_to_ppm(&px, w, h)).map_err(|e| (3, format!("{path}: {e}")))?;
+        println!("saved {w}x{h} preview to {path} (from {}x{})", img.w, img.h);
+        return Ok(0);
+    };
+    let io_err = |e: io::Error| (3, e.to_string());
+    // Older firmware would draw "IMG ..." as text and then treat the pixels as commands.
+    let info = port.cmd("INFO", timeout).map_err(io_err)?.ok_or((4, "INFO: no reply".to_string()))?;
+    let fw = info.split_whitespace().nth(2).unwrap_or("");
+    let ver: Vec<u32> = fw.split('.').filter_map(|p| p.parse().ok()).collect();
+    if ver.len() != 3 || (ver[0], ver[1]) < (1, 1) {
+        return Err((3, format!("images need firmware 1.1.0 or newer (dongle has {fw:?}); rerun setup.sh to update")));
+    }
+    let rot = match o.rot {
+        None => parse_rot(&info).ok_or((3, format!("unexpected INFO reply {info:?}")))?,
+        Some(r) => {
+            let r = if r == 255 { auto_rot } else { r };
+            match port.cmd(&format!("ROT {r}"), timeout).map_err(io_err)? {
+                Some(rep) if rep.starts_with("OK") => r,
+                Some(rep) => return Err((1, format!("ROT {r}: {rep}"))),
+                None => return Err((4, "ROT: no reply".into())),
+            }
+        }
+    };
+    let (w, h) = dims_for_rot(rot);
+    let px = image::to_rgb565_be(image::render(&img, w, h, o.fit, o.bg), w, h, o.dither);
+    // Chunked with acks: the device's USB driver drops data instead of throttling us.
+    let chunk = match port.cmd(&format!("IMG 0 0 {w} {h}"), timeout).map_err(io_err)? {
+        Some(r) if r.starts_with("READY ") => r[6..].trim().parse::<usize>().unwrap_or(0).max(64),
+        Some(r) => return Err((1, format!("IMG: {r}"))),
+        None => return Err((4, "IMG: no reply".into())),
+    };
+    let parts: Vec<&[u8]> = px.chunks(chunk).collect();
+    for (i, part) in parts.iter().enumerate() {
+        port.write_bytes(part).map_err(io_err)?;
+        let last = i + 1 == parts.len();
+        match port.read_line(timeout.max(Duration::from_secs(3))).map_err(io_err)? {
+            Some(r) if !last && r == "NEXT" => {}
+            Some(r) if last && r.starts_with("OK") => return Ok(0),
+            Some(r) => return Err((1, format!("IMG: {r}"))),
+            None => return Err((4, "IMG: no reply".into())),
+        }
+    }
+    Ok(0)
+}
+
 fn cmd_list(timeout: Duration) -> u8 {
     let found = find_dongles();
     if found.is_empty() {
@@ -405,7 +553,12 @@ fn run() -> Result<u8, (u8, String)> {
     if o.rest.first().map(|s| s.as_str()) == Some("list") {
         return Ok(cmd_list(o.timeout));
     }
-    let lines = build_lines(&o.rest).map_err(|e| (2, e))?;
+    let is_image = matches!(o.rest.first().map(|s| s.as_str()), Some("image" | "img"));
+    let img_opts = if is_image { Some(parse_image_opts(&o.rest[1..]).map_err(|e| (2, e))?) } else { None };
+    if let Some(io) = img_opts.as_ref().filter(|io| io.save.is_some()) {
+        return cmd_image(io, None, o.timeout);
+    }
+    let lines = if is_image { vec![] } else { build_lines(&o.rest).map_err(|e| (2, e))? };
 
     // Resolve + open, retrying while --wait is in effect (e.g. right after a flash or plug-in).
     let wait_until = o.wait.map(|w| Instant::now() + w);
@@ -434,6 +587,10 @@ fn run() -> Result<u8, (u8, String)> {
             },
         }
     };
+
+    if let Some(io) = &img_opts {
+        return cmd_image(io, Some(&mut port), o.timeout);
+    }
 
     let mut rc = 0u8;
     for l in &lines {

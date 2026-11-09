@@ -12,7 +12,7 @@
 #include <Preferences.h>
 
 #define FW_NAME    "tdongle-display"
-#define FW_VERSION "1.0.0"
+#define FW_VERSION "1.1.0"
 
 // ---- T-Dongle-S3 pins ----
 static constexpr int PIN_LCD_MOSI = 3;
@@ -264,7 +264,7 @@ static void handleLine(String l) {
     reply("OK commands: PING INFO HELP MSG <text> | CLEAR [c] | TEXT x y size c <text> |"
           " LOG <text> | PIXEL x y c | LINE x0 y0 x1 y1 c | RECT x y w h c | FILL x y w h c |"
           " CIRCLE x y r c | FCIRCLE x y r c | ROT 0-3 | BL 0-255 | LED c [bright0-31] | SPLASH |"
-          " SLEEP [secs] | WAKE | TEMP."
+          " SLEEP [secs] | WAKE | TEMP | IMG x y w h (binary, see README)."
           " c = name or RRGGBB. Unrecognized lines are shown as MSG.");
     return;
   }
@@ -342,6 +342,43 @@ static void handleLine(String l) {
     if (tokenize(rest, a, 2) < 2 || !toInt(a[0], p) || !toInt(a[1], v)) return err("usage: GPIO pin 0|1");
     pinMode(p, OUTPUT); digitalWrite(p, v); reply("OK"); return;
   }
+  if (CMD == "IMG") {
+    // IMG x y w h -> "READY <chunk>". The host then sends w*h*2 bytes of RGB565,
+    // big-endian (high byte first), rows top to bottom, in chunks of <chunk> bytes,
+    // waiting for "NEXT" after each chunk but the last. Final reply: "OK".
+    // The flow control is needed because the USB-Serial/JTAG driver drops data
+    // (it does not NAK the host) when its receive buffer is full.
+    int x, y, w, h;
+    if (tokenize(rest, a, 4) < 4 || !toInt(a[0], x) || !toInt(a[1], y) || !toInt(a[2], w) || !toInt(a[3], h))
+      return err("usage: IMG x y w h, then w*h*2 bytes RGB565 big-endian");
+    if (w <= 0 || h <= 0 || w * h > 160 * 80) return err("IMG: bad size (max 12800 pixels)");
+    size_t len = (size_t)w * h * 2;
+    uint8_t* buf = (uint8_t*)malloc(len);
+    if (!buf) return err("IMG: out of memory");
+    const size_t CHUNK = 4096;  // must stay below the RX buffer size
+    Serial.printf("READY %u\n", (unsigned)CHUNK);
+    size_t got = 0, chunkEnd = min(CHUNK, len);
+    uint32_t last = millis();
+    while (got < len) {
+      int avail = Serial.available();
+      if (avail > 0) {
+        got += Serial.read(buf + got, min((size_t)avail, chunkEnd - got));
+        last = millis();
+        if (got == chunkEnd && got < len) {
+          chunkEnd = min(got + CHUNK, len);
+          Serial.println("NEXT");
+        }
+      } else if (millis() - last > 2000) {
+        free(buf);
+        return err("IMG: timeout, got " + String(got) + " of " + String(len) + " bytes");
+      } else {
+        delay(1);
+      }
+    }
+    lcd.pushImage(x, y, w, h, (const lgfx::swap565_t*)buf);
+    free(buf);
+    reply("OK"); return;
+  }
   if (CMD == "LED") {
     int br = 8, n = tokenize(rest, a, 2);
     if (n < 1 || !parseColor(a[0], col) || (n == 2 && !toInt(a[1], br))) return err("usage: LED color [bright0-31]");
@@ -359,6 +396,7 @@ void setup() {
   // host would see the port drop, and button-free flashing would break.)
   setCpuFrequencyMhz(80);
   Serial.setTxTimeoutMs(0);  // never block if no host has the port open
+  Serial.setRxBufferSize(8192);  // room for image payloads
   Serial.begin(115200);
 
   pinMode(PIN_LED_DI, OUTPUT);
